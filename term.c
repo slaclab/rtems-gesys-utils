@@ -313,12 +313,10 @@ int							sc;
 			}
 			if ( x < 2 ) {
 				MESSAGE(0,stderr,"ansiQuery: %i columns??? - I bail\n",x);
-printk("ansiQuery: TERMINAL HAS %i COLS???\n",x);
 				goto restore;
 			}
  			if ( y < 2 ) {
 				MESSAGE(0,stderr,"ansiQuery: %i rows??? - I bail\n",y);
-printk("ansiQuery: TERMINAL HAS %i ROWS???\n",y);
 				goto restore;
 			}
 
