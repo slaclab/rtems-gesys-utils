@@ -81,9 +81,10 @@ int				x,y;
 	here[0]    = 0;
 
 	if ( ioctl(fdi, TIOCGWINSZ, &win) ) {
-		if (infoLevel>1)
+		if (infoLevel>1) {
 			perror("TIOCGWINSZ failed");
 			fprintf(stderr,"Trying ANSI VT100 Escapes instead\n");
+		}
 
 		if ( tcgetattr(fdi, &tios) ) {
 			PERROR("Unable to get terminal attributes");
