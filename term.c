@@ -23,7 +23,7 @@
 #define  ESC 27
 #define  MAXSTR 20
 
-#define PERROR(arg) if (!quiet) perror(arg)
+#define PERROR(arg) if (infoLevel>0) perror(arg)
 
 static int
 chat(int fdi, int fdo, char *str, char *reply, int quiet)
@@ -33,7 +33,8 @@ int i,l;
 	for (i=0, l=strlen(str); l > 0; ) {
 		int put = write(fdo, str+i, l);
 		if (put <=0 ) {
-			PERROR("Unable to write ESC sequence");
+			if (!quiet)
+				perror ("Unable to write ESC sequence");
 			return -2;
 		}
 		i+=put;
@@ -54,9 +55,14 @@ int i,l;
 	return -1;
 }
 
+/* infoLevel: 0 suppress all error and success messages
+ *            1 success messages and only error messages for fallback method (ANSI messages)
+ *            2 all messages
+ */
+
 
 int
-queryTerminalSize(int quiet)
+queryTerminalSize(int infoLevel)
 {
 struct termios	tios, tion;
 struct winsize	win;
@@ -75,8 +81,8 @@ int				x,y;
 	here[0]    = 0;
 
 	if ( ioctl(fdi, TIOCGWINSZ, &win) ) {
-		PERROR("TIOCGWINSZ failed");
-		if (!quiet)
+		if (infoLevel>1)
+			perror("TIOCGWINSZ failed");
 			fprintf(stderr,"Trying ANSI VT100 Escapes instead\n");
 
 		if ( tcgetattr(fdi, &tios) ) {
@@ -101,8 +107,8 @@ int				x,y;
 
 		sprintf(cbuf,"%c[6n",ESC);
 
-		if ( chat(fdi,fdo,cbuf,here,quiet) || 'R'!=here[strlen(here)-1] ) {
-			if (!quiet)
+		if ( chat(fdi,fdo,cbuf,here,infoLevel<1) || 'R'!=here[strlen(here)-1] ) {
+			if (infoLevel>0)
 				fprintf(stderr,"Invalid answer from terminal\n");
 			here[0] = 0;
 			goto restore;
@@ -112,15 +118,15 @@ int				x,y;
 		/* try to move into the desert */
 		sprintf(cbuf,"%c[998;998H",ESC);
 
-		if (chat(fdi,fdo,cbuf,0,quiet))
+		if (chat(fdi,fdo,cbuf,0,infoLevel<1))
 			goto restore;
 
 		/* see where we effectively are */
 		sprintf(cbuf,"%c[6n",ESC);
 
-		if (0==chat(fdi,fdo,cbuf,cbuf,quiet)) {
+		if (0==chat(fdi,fdo,cbuf,cbuf,infoLevel<1)) {
 			if (2!=sscanf(cbuf+1,"[%d;%dR",&y,&x)) {
-				if (!quiet)
+				if (infoLevel>0)
 					fprintf(stderr,"Unable to parse anser: '%s'\n",cbuf+1);
 				goto restore;
 			}
@@ -131,7 +137,7 @@ int				x,y;
 restore:
 		/* restore the cursor */
 		if (here[0])
-			chat(fdi,fdo,here,0,quiet);
+			chat(fdi,fdo,here,0,infoLevel<1);
 
 		if ( tcsetattr(fdi, TCSADRAIN, &tios) ) {
 			PERROR("Oops, unable to restore terminal attributes");
@@ -144,7 +150,7 @@ restore:
 		y = win.ws_row;
 	}
 
-	if (!quiet)
+	if (infoLevel>0)
 		printf("Terminal size: %dx%d (COLUMNS x LINES; environment vars set)\n",
 				x, y);
 
