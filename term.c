@@ -80,7 +80,9 @@
  * this notice affixed to any distribution by the recipient that contains a
  * copy or derivative of this software.
  */
+#ifdef __rtems__
 #include <rtems.h>
+#endif
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -279,7 +281,7 @@ int							sc;
 		tion.c_cflag &= ~(CSIZE|PARENB);
 		tion.c_cflag |= CS8;
 		tion.c_cc[VMIN]  = 0;/* use timeout even when reading single chars */
-		tion.c_cc[VTIME] = 3;/* .3 seconds */
+		tion.c_cc[VTIME] = 30;/* .3 seconds */
 
 
 		if ( (sc=my_tcsetattr(fdi, &tion)) ) {
@@ -473,5 +475,13 @@ int fd;
 		}
 	}
 	return 0;
+}
+#endif
+
+#ifndef __rtems__
+int
+main(int argc, char **argv)
+{
+	queryTerminalSize(4,0,0);
 }
 #endif
