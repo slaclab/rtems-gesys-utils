@@ -4,10 +4,41 @@
 
 /* Author: Till Straumann <strauman@slac.stanford.edu>, 2003/3 */
 
-/* We first do a TIOCGWINSZ ioctl and if that fails,
- * we try ANSI escape sequences.
- * If any of these methods succeeds, we set the COLUMNS and LINES
- * environment variables (which are interpreted by Cexp/TECLA)
+/* 
+ * Helper to query an ANSI conformant terminal for its dimensions
+ * using ESC-sequences.
+ *
+ * This file can be compiled in two different ways:
+ *
+ * A) producing an ordinary subroutine
+ *
+ * int queryTerminalSize(int infoLevel, int *width, int *height); 
+ *
+ * to be used for obtaining the terminal size. The routine
+ * tries TIOCGWINSZ and if that fails, it tries the ANSI
+ * escape sequence.
+ *
+ * B) if compiled with -DWINS_LINE_DISC, a call
+ * 
+ * int ansiTiocGwinszInstall(int disc);
+ *
+ * is provided which installs a special line discipline into
+ * linesw[disc] and switches the terminal to use it. The
+ * line discipline then implements TIOCGWINSZ by doing an
+ * ANSI escape sequence. This way, any software can simply
+ * do TIOCGWINSZ.
+ *
+ * Installing to 'disc == 0' switches back the tty's default
+ * discipline, i.e. removes this one.
+ *
+ * NOTE: on RTEMS, the only slots available to the user are
+ *       6 and 7.
+ *
+ * int queryTerminalSize(int infoLevel, int *width, int *height); 
+ *
+ * is still provided for convenience - it does a simple
+ * ioctl(TIOCGWINSZ).
+ *
  */
 
 /*
@@ -58,22 +89,118 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <errno.h>
+#include <assert.h>
+
+#ifdef WINS_LINE_DISC
+#include <rtems/libio.h>
+#endif
 
 #define  ESC 27
 #define  MAXSTR 20
 
-#define PERROR(arg) if (infoLevel>0) perror(arg)
+#ifdef WINS_LINE_DISC
+
+#include <rtems/termiostypes.h>
 
 static int
-chat(int fdi, int fdo, char *str, char *reply, int quiet)
+tty_ioctl_gwinsz(struct rtems_termios_tty *tty, rtems_libio_ioctl_args_t *args);
+
+/* just provide a TIOCGWINSZ ioctl which tries to
+ * ask the terminal for its size using ANSI ESC sequences
+ */
+static struct linesw ttyDiscGwinszAnsi = {
+	/* open  */ 0,
+	/* close */ 0,
+	/* read  */ 0,
+	/* write */ 0,
+	/* rxint */ 0,
+	/* start */ 0,
+	/* ioctl */ tty_ioctl_gwinsz,
+	/* modem */ 0
+};
+
+
+#define PERROR(arg)					do {} while(0)
+#define MESSAGE(level,where,fmt...)	do {} while(0)
+#else
+#define PERROR(arg)  \
+	if (infoLevel>0) \
+		perror(arg)
+
+#define MESSAGE(level,where,fmt...) \
+	if (infoLevel>level) \
+		fprintf(where,fmt)
+#endif
+
+#ifdef WINS_LINE_DISC
+static int
+my_do_write(rtems_libio_t *iop, char *buf, int l)
+{
+rtems_libio_rw_args_t arg;
+	arg.iop	        = iop;
+	arg.offset      = 0; /* should be unused */
+	arg.buffer      = buf;
+	arg.count       = l;
+	arg.flags       = 0;
+#warning TODO flags
+	arg.bytes_moved = 0;
+
+	return RTEMS_SUCCESSFUL == rtems_termios_write(&arg) ? arg.bytes_moved : -1;
+}
+
+static int
+my_do_read(rtems_libio_t *iop, char *buf, int l)
+{
+rtems_libio_rw_args_t arg;
+	arg.iop	        = iop;
+	arg.offset      = 0; /* should be unused */
+	arg.buffer      = buf;
+	arg.count       = l;
+	arg.flags       = 0;
+#warning TODO flags
+	arg.bytes_moved = 0;
+
+	return RTEMS_SUCCESSFUL == rtems_termios_read(&arg) ? arg.bytes_moved : -1;
+}
+
+static rtems_status_code
+my_tcsetattr(rtems_libio_t *iop, struct termios *ptios)
+{
+rtems_libio_ioctl_args_t	args;
+rtems_status_code			sc;
+		args.iop		= iop;
+		args.command = RTEMS_IO_TCDRAIN;
+		args.buffer  = 0;
+		if ( RTEMS_SUCCESSFUL != (sc=rtems_termios_ioctl(&args)) )
+			return sc;
+		args.command = RTEMS_IO_SET_ATTRIBUTES;
+		args.buffer  = ptios;
+		return rtems_termios_ioctl(&args);
+}
+#else
+#define my_do_write(fd,buf,i) write(fd,buf,i)
+#define my_do_read(fd,buf,i)  read(fd,buf,i)
+#define my_tcsetattr(fd, ptios) tcsetattr(fd,TCSADRAIN,ptios)
+#endif
+
+
+static int
+chat(
+#ifdef WINS_LINE_DISC
+	rtems_libio_t *fdi,
+	rtems_libio_t *fdo,
+#else
+	int fdi, int fdo,
+#endif
+	char *str, char *reply,
+	int infoLevel)
 {
 int i,l;
 
 	for (i=0, l=strlen(str); l > 0; ) {
-		int put = write(fdo, str+i, l);
+		int put = my_do_write(fdo, str+i, l);
 		if (put <=0 ) {
-			if (!quiet)
-				perror ("Unable to write ESC sequence");
+			PERROR ("Unable to write ESC sequence");
 			return -2;
 		}
 		i+=put;
@@ -83,7 +210,7 @@ int i,l;
 	if (!reply)
 		return 0;
 
-	for (i=0; i < MAXSTR - 1 && 1==read(fdi,reply+i,1); i++) {
+	for (i=0; i < MAXSTR - 1 && 1==my_do_read(fdi,reply+i,1); i++) {
 		if ('R' == reply[i]) {
 			reply[++i] = 0;
 			return 0;
@@ -94,32 +221,38 @@ int i,l;
 	return -1;
 }
 
-/* infoLevel: 0 suppress all error and success messages
- *            1 success messages and only error messages for fallback method (ANSI messages)
- *            2 all messages
- */
 
-
-int
-queryTerminalSize(int infoLevel)
+static int
+ansiQuery(
+	int infoLevel,
+#ifndef WINS_LINE_DISC
+	int							fdi,
+	int							fdo,
+#else
+	rtems_libio_t				*fdi,	
+	struct rtems_termios_tty	*tty,
+#endif
+	struct winsize				*pwin
+		 )
 {
-struct termios	tios, tion;
-struct winsize	win;
-int				fdi,fdo;
-char			cbuf[MAXSTR];
-char			here[MAXSTR];
-int				rval = 0xdeadbeef;
-int				x,y;
+struct termios				tios, tion;
+char						cbuf[MAXSTR];
+char						here[MAXSTR];
+int							x,y;
+int							rval = -1;
+#ifdef WINS_LINE_DISC
+rtems_libio_t				*fdo;
+rtems_status_code			sc;
+#else
+int							sc;
+#endif
 
-	if ( (fdi=fileno(stdin))<0 || (fdo=fileno(stdout))<0 ) {
-		PERROR("Unable to determine file descriptor");
-		return -1;
-	}
+		here[0] = 0;
 
-	win.ws_row = win.ws_col = -1;
-	here[0]    = 0;
-
-	if ( ioctl(fdi, TIOCGWINSZ, &win) ) {
+#ifdef WINS_LINE_DISC
+		tios = tty->termios;
+		fdo  = fdi;
+#else 
 		if (infoLevel>1) {
 			perror("TIOCGWINSZ failed");
 			fprintf(stderr,"Trying ANSI VT100 Escapes instead\n");
@@ -129,8 +262,12 @@ int				x,y;
 			PERROR("Unable to get terminal attributes");
 			return -1;
 		}
+#endif
 
+		/* save old settings */
 		tion = tios;
+
+		/* switch to raw mode */
 		tion.c_iflag &= ~(IGNBRK|BRKINT|PARMRK|ISTRIP
 		                 |INLCR|IGNCR|ICRNL|IXON);
 		tion.c_oflag &= ~OPOST;
@@ -140,16 +277,17 @@ int				x,y;
 		tion.c_cc[VMIN]  = 0;/* use timeout even when reading single chars */
 		tion.c_cc[VTIME] = 3;/* .3 seconds */
 
-		if ( tcsetattr(fdi, TCSADRAIN, &tion) ) {
+
+		if ( (sc=my_tcsetattr(fdi, &tion)) ) {
 			PERROR("Unable to make raw terminal");
-			return -1;
+			return sc;
 		}
 
+		/* do the query */
 		sprintf(cbuf,"%c[6n",ESC);
 
-		if ( chat(fdi,fdo,cbuf,here,infoLevel<1) || 'R'!=here[strlen(here)-1] ) {
-			if (infoLevel>0)
-				fprintf(stderr,"Invalid answer from terminal\n");
+		if ( chat(fdi,fdo,cbuf,here,infoLevel) || 'R'!=here[strlen(here)-1] ) {
+			MESSAGE(0,stderr,"Invalid answer from terminal\n");
 			here[0] = 0;
 			goto restore;
 		}
@@ -158,46 +296,146 @@ int				x,y;
 		/* try to move into the desert */
 		sprintf(cbuf,"%c[998;998H",ESC);
 
-		if (chat(fdi,fdo,cbuf,0,infoLevel<1))
+		if (chat(fdi,fdo,cbuf,0,infoLevel))
 			goto restore;
 
 		/* see where we effectively are */
 		sprintf(cbuf,"%c[6n",ESC);
 
-		if (0==chat(fdi,fdo,cbuf,cbuf,infoLevel<1)) {
+		if (0==chat(fdi,fdo,cbuf,cbuf,infoLevel)) {
 			if (2!=sscanf(cbuf+1,"[%d;%dR",&y,&x)) {
-				if (infoLevel>0)
-					fprintf(stderr,"Unable to parse anser: '%s'\n",cbuf+1);
+				MESSAGE(0,stderr,"Unable to parse anser: '%s'\n",cbuf+1);
 				goto restore;
 			}
 			rval = 0;
+			if (pwin) {
+				pwin->ws_col = x;
+				pwin->ws_row = y;
+			}
 		}
 
 
 restore:
 		/* restore the cursor */
 		if (here[0])
-			chat(fdi,fdo,here,0,infoLevel<1);
+			chat(fdi,fdo,here,0,infoLevel);
 
-		if ( tcsetattr(fdi, TCSADRAIN, &tios) ) {
+		if ( (sc=my_tcsetattr(fdi, &tios)) ) {
 			PERROR("Oops, unable to restore terminal attributes");
-			return -1;
+			return sc;
 		}
-		if (rval)
-			return rval;
-	} else {
-		x = win.ws_col;
-		y = win.ws_row;
+
+		return rval;
+}
+
+
+/* infoLevel: 0 suppress all error and success messages
+ *            1 success messages and only error messages for fallback method (ANSI messages)
+ *            2 all messages
+ */
+
+int
+queryTerminalSize(int infoLevel, int *pwidth, int *pheight)
+{
+int					fdi;
+#ifndef WINS_LINE_DISC
+int					fdo;
+#endif
+struct winsize		win;
+int					rval;
+
+	if (	(fdi=fileno(stdin))  < 0
+#ifndef WINS_LINE_DISC
+		||
+			(fdo=fileno(stdout)) < 0
+#endif
+	   ) {
+		if (infoLevel)
+			perror("Unable to determine file descriptor");
+		return -1;
 	}
 
-	if (infoLevel>0)
-		printf("Terminal size: %dx%d (COLUMNS x LINES; environment vars set)\n",
-				x, y);
+	/* if we compiled with WINS_LINE_DISC, ansiQuery is done
+	 * transparently
+	 */
+	if ( 0 == (rval=ioctl(fdi, TIOCGWINSZ, &win) )
+#ifndef WINS_LINE_DISC
+		 ||
+		 0 == (rval=ansiQuery(infoLevel, fdi, fdo, &win))
+#endif
+	   ) {
 
-	sprintf(cbuf,"COLUMNS=%d",x);
-	putenv(cbuf);
-	sprintf(cbuf,"LINES=%d",y);
-	putenv(cbuf);
+		if (infoLevel)
+			printf("Terminal size: %dx%d (columns x lines)\n", win.ws_col, win.ws_row);
 
+		if (pwidth)  *pwidth  = win.ws_col;
+		if (pheight) *pheight = win.ws_row;
+	}
+
+	return rval;
+}
+
+#ifdef WINS_LINE_DISC
+
+static int
+tty_ioctl_gwinsz(struct rtems_termios_tty *tty, rtems_libio_ioctl_args_t *args)
+{
+	if ( TIOCGWINSZ != args->command )
+		return RTEMS_INVALID_NUMBER;
+
+	return ansiQuery(0, args->iop, tty, (struct winsize *)args->buffer);
+}
+
+int
+ansiTiocGwinszInstall(int disc)
+{
+int odisc;
+int fd;
+
+	if ( (fd=fileno(stdin)) < 0 ) {
+		perror("Unable to determine file descriptor for 'stdin'");
+		return -1;
+	}
+	if ( ioctl(fd, TIOCGETD, &odisc) ) {
+		perror("Unable to get current line discipline (no tty?)");
+		return -1;
+	}
+
+	if ( disc <=0 ) {
+		/* uninstall */
+		disc =0;
+		if ( ioctl(fd, TIOCSETD, &disc) ) {
+			perror("Unable to install discipline #0");
+			return -1;
+		}
+		/* leave the linesw entry - other ttys may still use it */
+	} else {
+		char *scan;
+		if (disc <= PPPDISC || disc >=MAXLDISC) {
+			fprintf(stderr,"Invalid parameter\n");
+			return -1;
+		}
+		if (odisc == disc) {
+			fprintf(stderr,"Line %i currently in use\n",disc);
+			return -1;
+		}
+		for (scan = (char*)(linesw+disc); scan < (char*)(linesw+disc+1); scan++) {
+			if (*scan) {
+				fprintf(stderr,"linesw slot %i seems to be in use already, sorry\n",disc);
+				return -1;
+			}
+		}
+		/* everything seems to be OK so far */
+		linesw[disc] = ttyDiscGwinszAnsi;
+
+		if (ioctl(fd, TIOCSETD, &disc)) {
+			perror("Unable to install");
+
+			memset(linesw+disc, 0, sizeof(linesw[disc]));
+
+			return -1;
+		}
+	}
 	return 0;
 }
+#endif
