@@ -396,10 +396,21 @@ ansiTiocGwinszInstall(int disc)
 int odisc;
 int fd;
 
+
 	if ( (fd=fileno(stdin)) < 0 ) {
 		perror("Unable to determine file descriptor for 'stdin'");
 		return -1;
 	}
+
+	if (!isatty(fd)) {
+		fprintf(stderr,"stdin is not a terminal\n");
+		return -1;
+	}
+
+	/* see if it works already */
+	if ( !queryTerminalSize(0,0,0) )
+		return 0;
+
 	if ( ioctl(fd, TIOCGETD, &odisc) ) {
 		perror("Unable to get current line discipline (no tty?)");
 		return -1;
@@ -437,6 +448,18 @@ int fd;
 
 			memset(linesw+disc, 0, sizeof(linesw[disc]));
 
+			return -1;
+		}
+
+		/* verify that the hack does the job */
+		if (queryTerminalSize(0,0,0)) {
+			if (ioctl(fd, TIOCSETD, &odisc)) {
+				perror("Unable to restore original");
+			} else {
+				fprintf(stderr,"Ansi ESC sequence doesn't seem to work, sorry\n");
+			}
+			/* wipe out */
+			memset(linesw+disc, 0, sizeof(linesw[disc]));
 			return -1;
 		}
 	}
