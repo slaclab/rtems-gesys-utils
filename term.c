@@ -141,8 +141,10 @@ rtems_libio_rw_args_t arg;
 	arg.offset      = 0; /* should be unused */
 	arg.buffer      = buf;
 	arg.count       = l;
-	arg.flags       = 0;
-#warning TODO flags
+	/* hmm - could be that iop->flags are read-only - but termios doesn't seem
+	 * to look at the flags anyways...
+	 */
+	arg.flags       = iop->flags;
 	arg.bytes_moved = 0;
 
 	return RTEMS_SUCCESSFUL == rtems_termios_write(&arg) ? arg.bytes_moved : -1;
@@ -156,8 +158,10 @@ rtems_libio_rw_args_t arg;
 	arg.offset      = 0; /* should be unused */
 	arg.buffer      = buf;
 	arg.count       = l;
-	arg.flags       = 0;
-#warning TODO flags
+	/* hmm - could be that iop->flags are write-only - but termios doesn't seem
+	 * to look at the flags anyways...
+	 */
+	arg.flags       = iop->flags;
 	arg.bytes_moved = 0;
 
 	return RTEMS_SUCCESSFUL == rtems_termios_read(&arg) ? arg.bytes_moved : -1;
