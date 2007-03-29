@@ -404,7 +404,6 @@ tty_ioctl_gwinsz(struct rtems_termios_tty *tty, rtems_libio_ioctl_args_t *args)
 int
 ansiTiocGwinszInstall(int disc)
 {
-int odisc;
 int fd;
 
 
@@ -418,15 +417,6 @@ int fd;
 		return -1;
 	}
 
-	/* see if it works already */
-	if ( !queryTerminalSize(0,0,0) )
-		return 0;
-
-	if ( ioctl(fd, TIOCGETD, &odisc) ) {
-		perror("Unable to get current line discipline (no tty?)");
-		return -1;
-	}
-
 	if ( disc <=0 ) {
 		/* uninstall */
 		disc =0;
@@ -437,6 +427,17 @@ int fd;
 		/* leave the linesw entry - other ttys may still use it */
 	} else {
 		char *scan;
+		int odisc;
+
+		/* see if it works already */
+		if ( !queryTerminalSize(0,0,0) )
+			return 0;
+
+		if ( ioctl(fd, TIOCGETD, &odisc) ) {
+			perror("Unable to get current line discipline (no tty?)");
+			return -1;
+		}
+
 		if (disc <= PPPDISC || disc >=MAXLDISC) {
 			fprintf(stderr,"Invalid parameter\n");
 			return -1;
