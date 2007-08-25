@@ -104,6 +104,12 @@
 
 #include <rtems/termiostypes.h>
 
+#include "minversion.h"
+
+#if RTEMS_ISMINVERSION(4,7,99)
+#define linesw rtems_termios_linesw
+#endif
+
 static int
 tty_ioctl_gwinsz(struct rtems_termios_tty *tty, rtems_libio_ioctl_args_t *args);
 
