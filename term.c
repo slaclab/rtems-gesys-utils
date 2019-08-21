@@ -1,5 +1,3 @@
-/* $Id$ */
-
 /* (non thread safe) helper to determine the terminal size */
 
 /* Author: Till Straumann <strauman@slac.stanford.edu>, 2003/3 */
@@ -188,13 +186,19 @@ static rtems_status_code
 my_tcsetattr(rtems_libio_t *iop, struct termios *ptios)
 {
 rtems_libio_ioctl_args_t	args;
+#ifdef RTEMS_IO_TCDRAIN
 rtems_status_code			sc;
+#endif
 		args.iop		= iop;
+#ifdef RTEMS_IO_TCDRAIN
 		args.command = RTEMS_IO_TCDRAIN;
 		args.buffer  = 0;
 		if ( RTEMS_SUCCESSFUL != (sc=rtems_termios_ioctl(&args)) )
 			return sc;
 		args.command = RTEMS_IO_SET_ATTRIBUTES;
+#else
+		args.command = TIOCSETAW;
+#endif
 		args.buffer  = ptios;
 		return rtems_termios_ioctl(&args);
 }
