@@ -30,6 +30,8 @@
 #define NFS_PATH	UNSUP_PATH
 #endif
 
+#define P9_PATH 	4
+
 static char *dflt_fname  = "rtems.bin";
 #if defined(NFS_SUPPORT) || defined(TFTP_SUPPORT) || defined(RSH_SUPPORT)
 static char *path_prefix = 0;
@@ -53,6 +55,9 @@ int help = 0, rc;
 		}
 		help = 1;
 	}
+
+	if (!strncmp(path, "9p::", 4))
+		return P9_PATH;
 
 	col1  = strchr(path,':');
 	tild  = strchr(path,'~');
@@ -105,11 +110,12 @@ int help = 0, rc;
 #ifdef RSH_SUPPORT
 		fprintf(stderr,"   RSH: [<host>:]~<user>/<symfile_path>\n"); 
 #endif
+		fprintf(stderr,"   9P: 9p::[<uid>.<gid>@][<host>]:<export_path>:<symfile_path>\n");
 	}
 	return LOCAL_PATH;
 }
 
-#if defined(NFS_SUPPORT) || defined(TFTP_SUPPORT) || defined(RSH_SUPPORT)
+#if defined(NFS_SUPPORT) || defined(TFTP_SUPPORT) || defined(RSH_SUPPORT) || defined(P9_SUPPORT)
 static char *buildPath(int type, char *path, char *prefix)
 {
 	if ( ! VALID_PATH(type) )
@@ -204,7 +210,7 @@ char *fn   = 0;
 
 #define IDOT_STR_LEN	20	/* enough to hold an IP4 dotted address or "BOOTP_HOST" */
 
-#if defined(RSH_SUPPORT) || defined(NFS_SUPPORT)
+#if defined(RSH_SUPPORT) || defined(NFS_SUPPORT) || defined(P9_SUPPORT)
 static int
 srvCheck(char **srvname, char *path)
 {
@@ -378,8 +384,10 @@ cleanup:
 }
 #endif
 
-/* RETURNS -2 if mount is ok but file cannot be opened; leaves NFS mounted */
-static int isNfsPath(char **srvname, char *opath, int *perrfd, char **thepathp, MntDesc md)
+extern int p9Mount(const char* ip, const char* srvpath, const char* mntpt, const char* otheropts);
+
+/* RETURNS -2 if mount is ok but file cannot be opened; leaves NFS/9P mounted */
+static int isRemotePath(char **srvname, char *opath, int *perrfd, char **thepathp, MntDesc md, int type)
 {
 
 int  fd    = -1, l;
@@ -390,6 +398,11 @@ char *rpath = 0;
 char *mnt   = 0;
 
 int  allocMntstring;
+
+  if (type != NFS_PATH && type != P9_PATH) {
+    fprintf(stderr, "Unsupported path type %d\n", type);
+    return -1;
+  }
 
 	if ( !md )
 		md = &dflt_mnt;
@@ -405,9 +418,21 @@ int  allocMntstring;
 	}
 
 
-	if ( !(path = buildPath(NFS_PATH, opath, path_prefix)) ) {
+	if ( !(path = buildPath(type, opath, path_prefix)) ) {
 		return -11;
 	}
+
+  /* Strip the leading 9p:: for 9P paths. path pointer must remain unmodified */
+  if (!strncmp(path, "9p::", 4)) {
+    /* overlapping strings with strcpy() is UB, so do it manually */
+    char *a = path;
+    char *b = path+4;
+    while (*b) {
+      *a = *b;
+      a++, b++;
+    }
+    *a = 0;
+  }
 
 	col1=strchr(path,':');
 	col2=strchr(col1+1,':');
@@ -421,7 +446,7 @@ int  allocMntstring;
 	}
 
 #if NFS_SUPPORT == 1
-	if ( !nfsInited ) {
+	if ( !nfsInited && type == NFS_PATH ) {
 		if ( rpcUdpInit() ) {
 			fprintf(stderr,"RPC-IO initialization failed - try RSH or TFTP\n");
 			goto cleanup;
@@ -487,7 +512,17 @@ int  allocMntstring;
 		/* race condition from here till possible unlink */
 		existed = !stat(mnt, &probe);
 		
-		if ( nfsMount(srvpart, rpath , mnt) ) {
+    int r;
+    switch ( type ) {
+    case NFS_PATH:
+      r = nfsMount(srvpart, rpath, mnt);
+      break;
+    case P9_PATH:
+      r = p9Mount(srvpart, rpath, mnt, "");
+      break;
+    }
+
+		if ( r ) {
 			if ( !existed )
 				unlink(mnt);
 			if ( allocMntstring ) {
@@ -510,7 +545,7 @@ int  allocMntstring;
 
 	/* are they interested in the path ? */
 	if ( thepathp ) {
-		*thepathp = path; 
+		*thepathp = path;
 		path = 0;
 	}
 
