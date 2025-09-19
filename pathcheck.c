@@ -212,17 +212,26 @@ char *fn   = 0;
 
 #if defined(RSH_SUPPORT) || defined(NFS_SUPPORT) || defined(P9_SUPPORT)
 static int
-srvCheck(char **srvname, char *path)
+srvCheck(char **srvname, char *inpath)
 {
 struct hostent	*h;
 char			buf[IDOT_STR_LEN];	/* enough to hold a 'dot-notation' ip addr */
+char			path[256];
 
-	if (   !path || !*path || 0==strcmp(path, "BOOTP_HOST") ) {
+	if (   !inpath || !*inpath || 0==strcmp(inpath, "BOOTP_HOST") ) {
 		if ( !*srvname ) {
 			fprintf(stderr,"No server name in pathspec and default server not set :-(\n");
 			return -1;
 		}
 	} else {
+		strcpy(path, inpath);
+		/* port number may be supplied by a !<NUM> (but this cannot be processed by getaddrinfo) */
+		char* p = strchr(path, '!');
+		if (p) {
+			*p = 0;
+			++p;
+		}
+
 		/* Changed server name */
 		/* canonicalize server name by looking it up */
 
@@ -237,7 +246,16 @@ char			buf[IDOT_STR_LEN];	/* enough to hold a 'dot-notation' ip addr */
 				}
 		buf[sizeof(buf)-1]=0;
 		free(*srvname);
-		*srvname = strdup(buf);
+		/* append the port back, if any was supplied earlier */
+		if (p) {
+			*srvname = malloc(strlen(buf) + 1 /*!*/ + strlen(p) + 1 /*NULL*/);
+			strcpy(*srvname, buf);
+			strcat(*srvname, "!");
+			strcat(*srvname, p);
+		}
+		else {
+			*srvname = strdup(buf);
+		}
 	}
 	return 0;
 }
