@@ -536,7 +536,10 @@ int  allocMntstring;
       r = nfsMount(srvpart, rpath, mnt);
       break;
     case P9_PATH:
-      r = p9Mount(srvpart, rpath, mnt, "");
+      /* p9Mount is defined in t9p. Last argument is options passed to mount(2)
+       * we want to limit the fid count here because we don't need the default
+       * of 256. */
+      r = p9Mount(srvpart, rpath, mnt, "maxfids=16");
       break;
     }
 
